@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import threading
 import time
+import platform
 
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
@@ -34,6 +35,10 @@ from ..llm.openai_llm import NO_QUESTION_MARKER, AnswerGenerator
 from ..metrics import Measurement, MetricsCollector, endpoint_delay_seconds
 from ..settings import Settings
 from ..stt.openai_stt import OpenAITranscriber
+from ..phase3.diarization import SpeakerDiarizer
+from ..phase3.domain import DomainKnowledge
+from ..phase3.translation import Translator
+from .retry import RetryCancelled, is_offline_error
 
 # Pipeline states, surfaced to the UI as strings so the view layer needs no
 # knowledge of the pipeline internals.
@@ -52,6 +57,12 @@ _LEVEL_EMIT_HZ = 15.0
 #: Characters buffered before answer text is shown, so a "(no question
 #: detected)" reply can be suppressed instead of flashing on screen.
 _ANSWER_GATE_CHARS = 24
+
+#: Bounded retry attempts for transcription and answer requests. Total tries,
+#: not additional retries on top of the first: 3 means the request gets at
+#: most two more chances after the first failure before giving up with a
+#: clear error, per R9.1/R9.2.
+_RETRY_ATTEMPTS = 3
 
 
 class PipelineWorker(QObject):
@@ -109,7 +120,10 @@ class PipelineWorker(QObject):
             self.failed.emit(str(exc))
         except Exception as exc:  # keep the UI alive whatever happens (R9.3)
             self.state_changed.emit(STATE_ERROR)
-            self.failed.emit(f"Unexpected {type(exc).__name__}: {exc}")
+            if is_offline_error(exc):
+                self.failed.emit(_offline_message(exc))
+            else:
+                self.failed.emit(f"Unexpected {type(exc).__name__}: {exc}")
         finally:
             self._teardown()
             self.state_changed.emit(STATE_IDLE)
@@ -117,8 +131,17 @@ class PipelineWorker(QObject):
 
     # -- internals ---------------------------------------------------------
 
+    def _interrupted(self) -> bool:
+        """True once the current request should stop retrying and unwind.
+
+        Shared by the transcriber and answer generator retry loops so a
+        user-requested stop, or a forced new turn while an answer is still
+        streaming, aborts a backoff sleep immediately instead of waiting it
+        out. Checked from the worker thread only.
+        """
+        return self._stop.is_set() or self._force_answer.is_set()
+
     def _run_session(self) -> None:
-        import pyaudiowpatch as pyaudio
         from openai import OpenAI, OpenAIError
 
         settings = self._settings
@@ -127,23 +150,60 @@ class PipelineWorker(QObject):
 
         api_key = load_api_key()
         client = OpenAI(api_key=api_key)
-        transcriber = OpenAITranscriber(
+        if settings.stt_model == "local-whisper":
+            from ..stt.local_whisper import LocalWhisperTranscriber
+
+            transcriber = LocalWhisperTranscriber(
+                model=settings.local_whisper_model,
+                language=model_settings.stt_language,
+            )
+        else:
+            transcriber = OpenAITranscriber(
+                client,
+                model=model_settings.stt_model,
+                language=model_settings.stt_language,
+                retry_attempts=_RETRY_ATTEMPTS,
+                should_stop=self._interrupted,
+            )
+        generator = AnswerGenerator(
             client,
-            model=model_settings.stt_model,
-            language=model_settings.stt_language,
+            model_settings,
+            retry_attempts=_RETRY_ATTEMPTS,
+            should_stop=self._interrupted,
         )
-        generator = AnswerGenerator(client, model_settings)
+        domain = DomainKnowledge(settings.domain_knowledge_dir)
+        diarizer = SpeakerDiarizer() if settings.enable_diarization else None
+        translator = (
+            Translator(client, model_settings.llm_model)
+            if settings.target_language.strip()
+            else None
+        )
         self._metrics = MetricsCollector(
             stt_model=model_settings.stt_model, llm_model=model_settings.llm_model
         )
         endpoint_delay = endpoint_delay_seconds(vad_settings)
         segmenter = UtteranceSegmenter(vad_settings)
 
-        with pyaudio.PyAudio() as pa:
-            device = resolve_device(pa, settings.audio_device_index)
+        if platform.system() == "Darwin":
+            from ..audio.mac_capture import MacSystemAudioCapture
+
+            audio_context = MacSystemAudioCapture(settings.audio_device_index)
+            device = "macOS CoreAudio loopback"
+            pa_context = None
+        else:
+            import pyaudiowpatch as pyaudio
+
+            pa_context = pyaudio.PyAudio()
+            audio_context = None
+            device = None
+
+        with pa_context if pa_context is not None else _NullContext():
+            if audio_context is None:
+                device = resolve_device(pa_context, settings.audio_device_index)
+                audio_context = SystemAudioCapture(pa_context, device)
 
             self.state_changed.emit(STATE_CALIBRATING)
-            with SystemAudioCapture(pa, device) as capture:
+            with audio_context as capture:
                 self._capture = capture
                 calibrated = False
                 next_level_at = 0.0
@@ -151,6 +211,17 @@ class PipelineWorker(QObject):
                 for chunk in capture.frames(timeout=0.2, idle_timeout=25.0):
                     if self._stop.is_set():
                         break
+
+                    if capture.callback_error:
+                        self.state_changed.emit(STATE_ERROR)
+                        self.failed.emit(
+                            "Audio capture stopped unexpectedly: "
+                            f"{capture.callback_error}\n\n"
+                            "This usually means the device was disconnected or "
+                            "disabled. Pick a different device in Settings and "
+                            "start listening again."
+                        )
+                        return
 
                     now = time.monotonic()
                     if now >= next_level_at:
@@ -184,6 +255,9 @@ class PipelineWorker(QObject):
                             generator=generator,
                             endpoint_delay=endpoint_delay,
                             error_type=OpenAIError,
+                            diarizer=diarizer,
+                            translator=translator,
+                            domain=domain,
                         )
                         # Audio kept arriving while that answer generated. That
                         # backlog is the follow-up question the person asked
@@ -206,7 +280,7 @@ class PipelineWorker(QObject):
                 if capture.timed_out_idle and not self._stop.is_set():
                     self.state_changed.emit(STATE_ERROR)
                     self.failed.emit(
-                        f"No audio received from {device.name!r}.\n\n"
+                        f"No audio received from {getattr(device, 'name', device)!r}.\n\n"
                         "Loopback devices deliver nothing while the endpoint is "
                         "idle on some drivers. Start playing meeting audio, then "
                         "start listening again."
@@ -216,31 +290,50 @@ class PipelineWorker(QObject):
         self,
         *,
         utterance: Utterance,
-        transcriber: OpenAITranscriber,
-        generator: AnswerGenerator,
+        transcriber,
         endpoint_delay: float,
         error_type: type[Exception],
+        generator: AnswerGenerator,
+        diarizer: SpeakerDiarizer | None,
+        translator: Translator | None,
+        domain: DomainKnowledge,
     ) -> None:
         self.state_changed.emit(STATE_TRANSCRIBING)
         try:
             result = transcriber.transcribe(
                 utterance.audio, prompt=self._settings.transcription_prompt
             )
+        except RetryCancelled:
+            # Stop/new-turn arrived while retrying; not a real failure.
+            return
         except error_type as exc:
-            self.failed.emit(f"Transcription failed: {_short_error(exc)}")
+            self.failed.emit(f"Transcription failed: {_describe_error(exc)}")
             return
 
         if not result.text:
             self.utterance_ignored.emit()
             return
 
-        self.question_ready.emit(result.text)
+        question = result.text
+        if diarizer is not None:
+            question = f"{diarizer.label(question).speaker}: {question}"
+        if translator is not None:
+            try:
+                question = translator.translate(question, self._settings.target_language)
+            except error_type as exc:
+                self.failed.emit(f"Translation failed: {_describe_error(exc)}")
+                return
+        self.question_ready.emit(question)
         self.state_changed.emit(STATE_THINKING)
 
         try:
-            generation = generator.answer(result.text)
+            context = domain.search(question)
+            generator.set_domain_context(context)
+            generation = generator.answer(question)
+        except RetryCancelled:
+            return
         except error_type as exc:
-            self.failed.emit(f"Answer request failed: {_short_error(exc)}")
+            self.failed.emit(f"Answer request failed: {_describe_error(exc)}")
             return
 
         # The model replies with a sentinel when the audio held no real
@@ -260,7 +353,13 @@ class PipelineWorker(QObject):
 
         try:
             for delta in generation:
-                if self._stop.is_set():
+                if self._stop.is_set() or self._force_answer.is_set():
+                    # A stop or a forced new turn both mean: abandon this
+                    # answer now rather than let it keep streaming while
+                    # nobody is watching it, and release the connection
+                    # immediately instead of waiting for it to finish on its
+                    # own.
+                    generation.cancel()
                     break
 
                 if not decided:
@@ -275,8 +374,13 @@ class PipelineWorker(QObject):
 
                 if not suppress:
                     self.answer_delta.emit(delta)
+        except RetryCancelled:
+            return
         except error_type as exc:
-            self.failed.emit(f"Answer stream failed: {_short_error(exc)}")
+            self.failed.emit(f"Answer stream failed: {_describe_error(exc)}")
+            return
+
+        if generation.cancelled:
             return
 
         if not decided:
@@ -372,3 +476,27 @@ def _short_error(exc: Exception) -> str:
 
     text = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
     return text if len(text) <= 200 else text[:197] + "..."
+
+
+def _offline_message(exc: Exception) -> str:
+    """A plain-language message for what looks like a connectivity problem."""
+    return (
+        "Couldn't reach OpenAI after retrying. Check your internet connection "
+        "and try again.\n\n"
+        f"Details: {_short_error(exc)}"
+    )
+
+
+def _describe_error(exc: Exception) -> str:
+    """Error text for the overlay, using a clearer message when offline."""
+    if is_offline_error(exc):
+        return _offline_message(exc)
+    return _short_error(exc)
+
+
+class _NullContext:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False

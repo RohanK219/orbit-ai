@@ -15,7 +15,15 @@
 #   2. PyAudioWPatch ships a native PortAudio DLL that PyInstaller does not pick
 #      up from imports alone, so it is collected explicitly.
 
+import sys
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
+
+# Spec files are executed before Analysis applies ``pathex``. Add the source
+# tree here as well so collect_submodules can see the local Phase 3 package
+# when PyInstaller is invoked from either the repository root or packaging/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 block_cipher = None
 
@@ -26,7 +34,7 @@ _pyaudio_binaries = collect_dynamic_libs("pyaudiowpatch")
 # -- keyring backends --------------------------------------------------------
 # keyring resolves its Windows Credential Manager backend dynamically, so its
 # backend submodules must be forced in or storing the API key fails at runtime.
-_hidden = collect_submodules("keyring.backends") + [
+_hidden = collect_submodules("keyring.backends") + collect_submodules("orbit.phase3") + [
     "win32ctypes.core",  # keyring's Windows backend dependency
 ]
 
@@ -53,6 +61,9 @@ _excludes = [
     "tkinter",
     "matplotlib",
     "PIL",
+    "pytesseract",
+    "sounddevice",
+    "faster_whisper",
     "pytest",
 ]
 

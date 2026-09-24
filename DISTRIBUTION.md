@@ -13,6 +13,13 @@ down, and the run machine only ever sees one file.
 powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
 ```
 
+The build performs a fast packaging preflight first. To run that check without
+starting PyInstaller:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\validate_packaging.py
+```
+
 This produces:
 
 ```

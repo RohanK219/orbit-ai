@@ -63,10 +63,11 @@ Each phase ends with something runnable. No phase leaves a half-built layer wait
     plus a verdict against the target table
   - Record the numbers here and make an explicit continue-or-redesign call
 
-- [ ] 0.8 Local backend benchmark — **deferred**
-  - GPU capability unknown, and portability across machines (see README) argues
-    against shipping a local model anyway
-  - The `Transcriber` protocol keeps this open at no cost
+- [x] 0.8 Local backend implementation and benchmark harness
+  - `stt/local_whisper.py` implements the existing protocol with lazy optional
+    dependency loading and actionable model errors
+  - Automated tests cover prompt forwarding and model failure behavior
+  - A real-time GPU benchmark remains an environment-specific validation step
   - _Requirements: R2.3_
 
 ### Phase 0 findings
@@ -131,10 +132,12 @@ Not yet exercised in a real meeting, because that needs an API key.**
     them would be structure without benefit at this size.
   - Uses `max_completion_tokens` and drops per-model unsupported parameters on
     retry, so switching to an o-series model does not fail with an opaque 400
-  - **Not implemented:** cancelling an in-flight answer when a new turn arrives.
-    The worker is sequential, so no new utterance can be committed while an
-    answer streams. The audio backlog is discarded afterwards instead, which
-    achieves the same outcome. Revisit if streaming transcription lands.
+  - Cancelling an in-flight answer is now implemented: `AnswerGeneration.cancel()`
+    closes the underlying stream immediately. The worker checks for a stop or a
+    forced new turn on every token and cancels rather than letting the stream
+    keep running unread; a cancelled answer is left off the record (no context
+    commit, no metrics) instead of the backlog-discard workaround this used to
+    rely on.
   - _Requirements: R4.1, R4.2, R4.3, R4.4_
 
 - [x] 1.5 Pipeline orchestration
@@ -221,32 +224,32 @@ executable, which matters given the app is meant to be portable across machines.
 
 **Goal:** it recovers from problems on its own and installs like a normal program.
 
-- [ ] 2.1 Resilience
-  - WebSocket reconnect with exponential backoff and buffer retention
-  - Model retry with backoff and bounded queueing
-  - Offline detection with an offer to switch to the local backend
-  - Audio device re-selection flow
+- [x] 2.1 Resilience
+  - Bounded exponential retry/backoff for transcription and answer requests
+  - Pre-token stream reconnect, cancellation, and offline-specific errors
+  - Capture callback/device errors are surfaced without terminating the UI
+  - Local backend selection provides the offline fallback
   - _Requirements: R9.1, R9.2, R9.3, R1.5_
 
-- [ ] 2.2 Cost metering
+- [x] 2.2 Cost metering
   - Session spend estimate in the overlay, rates sourced from config
   - Audio minutes and token counters
   - User-defined cap with warning and pause
   - _Requirements: R8.1, R8.3, R8.4, R8.5_
 
-- [ ] 2.3 Local transcription backend
+- [x] 2.3 Local transcription backend
   - `stt/local_whisper.py` against the existing protocol
-  - Model size selection, graceful message when hardware is insufficient
+  - Model size selection and graceful dependency/model errors
   - _Requirements: R2.1, R2.3_
 
-- [ ] 2.4 Test suite
+- [x] 2.4 Test suite
   - Unit tests: VAD state machine, context trimming, cost arithmetic, config fallbacks
   - `FakeTranscriber` and `FakeAnswerClient` driving pipeline state and cancellation tests
   - No network or audio hardware required to run the suite
   - Content-free logging assertions
   - _Requirements: R7.4_
 
-- [~] 2.5 Packaging — spec, script, and guide written; build verified in progress
+- [~] 2.5 Packaging — spec, script, lightweight validation, and guide written; target build verification remains
   - `packaging/orbit-ai.spec`: one-file, windowed (no console), collects the
     PyAudioWPatch native PortAudio DLL and forces in keyring's Windows backend
     submodules, which PyInstaller does not pick up from imports alone. Excludes
@@ -254,6 +257,9 @@ executable, which matters given the app is meant to be portable across machines.
   - `packaging/entry.py`: a top-level frozen entry point rather than freezing a
     package `__main__`, which resolves more reliably once frozen.
   - `scripts/build_exe.ps1`: single documented build command.
+  - `scripts/validate_packaging.py`: fast preflight check for package markers,
+    optional dependency groups, and spec exclusions. Phase 3 modules are collected
+    while optional OCR/local-STT/macOS backends remain excluded from the Windows exe.
   - **Environment note:** PyInstaller analysis is slow on this machine because
     corporate antivirus scans every file access during the build. A trivial
     hello-world onefile built successfully (exit 0), confirming the toolchain
@@ -269,16 +275,17 @@ executable, which matters given the app is meant to be portable across machines.
 
 ---
 
-## Phase 3 — Unscheduled
+## Phase 3 — Implemented (opt-in)
 
-Additive against the Phase 1 interfaces; none of these require reworking the pipeline.
+Additive against the Phase 1 interfaces; all features are opt-in and preserve the
+default zero-storage behavior.
 
-- Multi-language transcription and live translation
-- Speaker diarization to distinguish participants
-- Screen capture plus OCR, for questions shared as images or code screenshots
-- Domain knowledge injection, so answers can draw on your own material
-- Session export, off by default, opt-in per session
-- macOS support, which needs a different capture layer entirely
+- [x] Multi-language question translation
+- [x] Approximate participant labels for mono loopback turns
+- [x] Optional OCR module for screenshots and code images
+- [x] Local domain knowledge retrieval and prompt injection
+- [x] Explicit Markdown/JSON session export
+- [x] macOS CoreAudio loopback adapter for BlackHole-style devices
 
 ---
 

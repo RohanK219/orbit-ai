@@ -22,6 +22,7 @@ from .settings import Settings
 from .ui import theme
 from .ui.main_window import MainWindow, show_consent_notice
 from .ui.overlay import Overlay
+from .phase3.export import export_json, export_markdown
 
 
 class OrbitApp(QObject):
@@ -53,6 +54,7 @@ class OrbitApp(QObject):
         self.overlay.back_requested.connect(self._on_back)
         self.overlay.closed.connect(self._on_back)
         self.overlay.force_answer_requested.connect(self.session.force_answer)
+        self.overlay.export_requested.connect(self._export_session)
 
         session, overlay = self.session, self.overlay
         session.state_changed.connect(overlay.on_state_changed)
@@ -124,6 +126,19 @@ class OrbitApp(QObject):
             self.settings.save()
         except Exception:
             pass
+
+    def _export_session(self, path: str, fmt: str) -> None:
+        if not self.settings.allow_session_export:
+            return
+        turns = self.overlay.answer.turns_for_export()
+        try:
+            if fmt == "json":
+                export_json(path, turns)
+            else:
+                export_markdown(path, turns)
+            self.overlay.on_stats(f"Session exported to {path}")
+        except OSError as exc:
+            self.overlay.on_error(f"Export failed: {exc}")
 
     # -- hotkeys -----------------------------------------------------------
 

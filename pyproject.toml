@@ -22,6 +22,8 @@ dependencies = [
 # Optional local transcription backend, removes per-minute API cost.
 # Needs a CUDA-capable GPU to keep up with live audio.
 local-stt = ["faster-whisper>=1.0,<2"]
+# Phase 3 optional OCR and macOS loopback support.
+phase3 = ["pillow>=10,<13", "pytesseract>=0.3.10,<1", "sounddevice>=0.5,<1"]
 # Packaging
 build = ["pyinstaller>=6.6,<7"]
 

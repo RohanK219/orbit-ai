@@ -63,6 +63,7 @@ class Settings:
 
     # -- models --------------------------------------------------------------
     stt_model: str = "gpt-4o-mini-transcribe"
+    local_whisper_model: str = "base"
     llm_model: str = "gpt-4o-mini"
     #: Language hint for transcription. "auto" lets the model detect it.
     language: str = "en"
@@ -70,6 +71,10 @@ class Settings:
     context_turns: int = 6
     #: Extra vocabulary to bias transcription toward, comma separated.
     vocabulary_hint: str = ""
+    target_language: str = ""
+    enable_diarization: bool = False
+    domain_knowledge_dir: str = ""
+    allow_session_export: bool = False
 
     # -- segmentation --------------------------------------------------------
     #: Silence before a question is considered finished. The dominant latency
@@ -209,6 +214,10 @@ class Settings:
         self.max_answer_tokens = int(_clamp(self.max_answer_tokens, 64, 4000))
         self.context_turns = int(_clamp(self.context_turns, 0, 30))
         self.session_cost_limit_usd = max(0.0, float(self.session_cost_limit_usd))
+        if not isinstance(self.target_language, str):
+            self.target_language = ""
+        if not isinstance(self.domain_knowledge_dir, str):
+            self.domain_knowledge_dir = ""
 
         if not isinstance(self.hotkeys, dict):
             self.hotkeys = dict(DEFAULT_HOTKEYS)

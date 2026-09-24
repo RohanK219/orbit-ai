@@ -7,6 +7,8 @@ the way.
 
 from __future__ import annotations
 
+import platform
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -31,7 +33,12 @@ from . import theme
 from .widgets import LevelMeter
 
 LLM_MODELS = ["gpt-4o-mini", "gpt-4o"]
-STT_MODELS = ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]
+STT_MODELS = [
+    ("OpenAI: gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"),
+    ("OpenAI: gpt-4o-transcribe", "gpt-4o-transcribe"),
+    ("OpenAI: whisper-1", "whisper-1"),
+    ("Local: faster-whisper", "local-whisper"),
+]
 LANGUAGES = [
     ("English", "en"),
     ("Auto-detect", "auto"),
@@ -173,7 +180,11 @@ class MainWindow(QWidget):
         )
 
         self.stt_combo = QComboBox(group)
-        self.stt_combo.addItems(STT_MODELS)
+        for label, value in STT_MODELS:
+            self.stt_combo.addItem(label, value)
+        self.local_model_edit = QLineEdit(group)
+        self.local_model_edit.setPlaceholderText("base, small, medium...")
+        self.local_model_edit.setToolTip("faster-whisper model name used for local transcription.")
 
         self.language_combo = QComboBox(group)
         for label, code in LANGUAGES:
@@ -184,11 +195,16 @@ class MainWindow(QWidget):
         self.vocab_edit.setToolTip(
             "Comma-separated terms to help transcription with jargon and names."
         )
+        self.target_language_edit = QLineEdit(group)
+        self.target_language_edit.setPlaceholderText("Leave blank to keep original language")
+        self.target_language_edit.setToolTip("Translate finalized questions to this language.")
 
         layout.addRow("Answers", self.llm_combo)
         layout.addRow("Transcription", self.stt_combo)
+        layout.addRow("Local Whisper model", self.local_model_edit)
         layout.addRow("Language", self.language_combo)
         layout.addRow("Vocabulary hints", self.vocab_edit)
+        layout.addRow("Translate questions to", self.target_language_edit)
         return group
 
     def _build_tuning_group(self) -> QGroupBox:
@@ -224,6 +240,10 @@ class MainWindow(QWidget):
         self.drain_check = QCheckBox(
             "Drop stale audio left by a long answer", group
         )
+        self.diarization_check = QCheckBox("Label alternating participants", group)
+        self.export_check = QCheckBox("Allow explicit session export", group)
+        self.domain_edit = QLineEdit(group)
+        self.domain_edit.setPlaceholderText("Folder with private reference files")
         self.drain_check.setToolTip(
             "Off by default. Follow-up questions asked while an answer is still "
             "generating are normally kept and shown as the next turn. Enable "
@@ -236,6 +256,9 @@ class MainWindow(QWidget):
         layout.addRow("Overlay opacity", self.opacity_spin)
         layout.addRow("Session spend limit", self.limit_spin)
         layout.addRow("", self.drain_check)
+        layout.addRow("Domain knowledge folder", self.domain_edit)
+        layout.addRow("", self.diarization_check)
+        layout.addRow("", self.export_check)
         return group
 
     # -- settings binding --------------------------------------------------
@@ -243,12 +266,18 @@ class MainWindow(QWidget):
     def _load_from_settings(self) -> None:
         s = self._settings
         self.llm_combo.setCurrentText(s.llm_model)
-        self.stt_combo.setCurrentText(s.stt_model)
+        stt_index = self.stt_combo.findData(s.stt_model)
+        self.stt_combo.setCurrentIndex(stt_index if stt_index >= 0 else 0)
+        self.local_model_edit.setText(s.local_whisper_model)
 
         index = self.language_combo.findData(s.language)
         self.language_combo.setCurrentIndex(index if index >= 0 else 0)
 
         self.vocab_edit.setText(s.vocabulary_hint)
+        self.target_language_edit.setText(s.target_language)
+        self.domain_edit.setText(s.domain_knowledge_dir)
+        self.diarization_check.setChecked(s.enable_diarization)
+        self.export_check.setChecked(s.allow_session_export)
         self.silence_spin.setValue(s.silence_ms)
         self.font_spin.setValue(s.font_size)
         self.opacity_spin.setValue(s.opacity_percent)
@@ -259,9 +288,14 @@ class MainWindow(QWidget):
         """Read the form back into the settings object and persist it."""
         s = self._settings
         s.llm_model = self.llm_combo.currentText()
-        s.stt_model = self.stt_combo.currentText()
+        s.stt_model = self.stt_combo.currentData() or "gpt-4o-mini-transcribe"
+        s.local_whisper_model = self.local_model_edit.text().strip() or "base"
         s.language = self.language_combo.currentData() or "en"
         s.vocabulary_hint = self.vocab_edit.text().strip()
+        s.target_language = self.target_language_edit.text().strip()
+        s.domain_knowledge_dir = self.domain_edit.text().strip()
+        s.enable_diarization = self.diarization_check.isChecked()
+        s.allow_session_export = self.export_check.isChecked()
         s.silence_ms = self.silence_spin.value()
         s.font_size = self.font_spin.value()
         s.opacity_percent = self.opacity_spin.value()
@@ -277,6 +311,26 @@ class MainWindow(QWidget):
         """Re-enumerate loopback devices into the combo box."""
         self.device_combo.clear()
         self.device_combo.addItem("Automatic (default output device)", None)
+
+        if platform.system() == "Darwin":
+            try:
+                import sounddevice as sd
+
+                for index, device in enumerate(sd.query_devices()):
+                    if device.get("max_input_channels", 0) > 0:
+                        self.device_combo.addItem(
+                            f"{device['name']} ({int(device['default_samplerate'])} Hz)",
+                            index,
+                        )
+                self.audio_status.setText(
+                    "Select a CoreAudio loopback device such as BlackHole."
+                )
+                return
+            except Exception as exc:
+                self.audio_status.setText(
+                    f"Could not list macOS audio devices: {exc}"
+                )
+                return
 
         try:
             import pyaudiowpatch as pyaudio

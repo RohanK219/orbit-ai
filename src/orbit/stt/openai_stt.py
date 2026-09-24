@@ -14,11 +14,13 @@ from __future__ import annotations
 import io
 import time
 import wave
+from typing import Callable
 
 import numpy as np
 from openai import OpenAI
 
 from ..config import TARGET_SAMPLE_RATE
+from ..core.retry import call_with_retry
 from .base import TranscriptionResult
 
 
@@ -46,10 +48,19 @@ class OpenAITranscriber:
         client: OpenAI,
         model: str = "gpt-4o-mini-transcribe",
         language: str | None = "en",
+        *,
+        retry_attempts: int = 3,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self._client = client
         self.model = model
         self.language = language
+        #: Bounded so a dead network fails fast with a clear error rather than
+        #: leaving a meeting-time worker thread retrying indefinitely.
+        self._retry_attempts = retry_attempts
+        #: Optional cancellation check, consulted between retry attempts, so a
+        #: user-requested stop does not have to wait out the full backoff.
+        self._should_stop = should_stop
 
     def transcribe(
         self, audio: np.ndarray, *, prompt: str | None = None
@@ -72,7 +83,11 @@ class OpenAITranscriber:
             kwargs["prompt"] = prompt
 
         started = time.monotonic()
-        response = self._client.audio.transcriptions.create(**kwargs)
+        response = call_with_retry(
+            lambda: self._client.audio.transcriptions.create(**kwargs),
+            attempts=self._retry_attempts,
+            should_stop=self._should_stop,
+        )
         latency = time.monotonic() - started
 
         # response_format="text" yields a plain string, but be tolerant in case

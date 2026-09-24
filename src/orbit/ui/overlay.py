@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from ..core.worker import STATE_ERROR, STATE_IDLE
 from ..settings import Settings
@@ -79,6 +80,7 @@ class Overlay(QWidget):
     back_requested = Signal()
     force_answer_requested = Signal()
     closed = Signal()
+    export_requested = Signal(str, str)
     """Emitted when the overlay is dismissed, including via Alt+F4."""
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
@@ -169,9 +171,15 @@ class Overlay(QWidget):
         self.copy_button.clicked.connect(self._copy_code)
         self.copy_button.hide()
 
+        self.export_button = QPushButton("Export", footer)
+        self.export_button.setToolTip("Explicitly export this session")
+        self.export_button.clicked.connect(self._export_session)
+        self.export_button.hide()
+
         footer_layout.addWidget(self.stats_label)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.copy_button)
+        footer_layout.addWidget(self.export_button)
         footer_layout.addWidget(self.hint_label)
         footer_layout.addWidget(QSizeGrip(footer), 0, Qt.AlignmentFlag.AlignBottom)
         root.addWidget(footer)
@@ -264,16 +272,30 @@ class Overlay(QWidget):
         self.stats_label.clear()
         self.answer.set_placeholder(_LISTENING_PLACEHOLDER)
         self.answer.clear_feed()
+        self.export_button.hide()
 
     def on_session_stopped(self) -> None:
         self.level.reset()
         # Leave the conversation on screen after stopping so it can still be
         # read and scrolled; only reset the placeholder for the next session.
         self.answer.set_placeholder(_IDLE_PLACEHOLDER)
+        self.export_button.setVisible(self._settings.allow_session_export and self.answer.turn_count > 0)
 
     def clear_display(self) -> None:
         self.answer.clear_feed()
         self.copy_button.hide()
+        self.export_button.hide()
+
+    def _export_session(self) -> None:
+        if not self._settings.allow_session_export:
+            return
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Export orbit-ai session", "", "Markdown (*.md);;JSON (*.json)"
+        )
+        if not path:
+            return
+        fmt = "json" if selected.startswith("JSON") or path.lower().endswith(".json") else "markdown"
+        self.export_requested.emit(path, fmt)
 
     # -- interactions ------------------------------------------------------
 

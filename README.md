@@ -151,8 +151,25 @@ translucent, streaming answers with syntax-highlighted code, device picker, glob
 hotkeys, settings persistence, packaged as a single `.exe`.
 
 **Phase 2 and beyond.** Optional local `faster-whisper` backend to remove per-minute
-cost, streaming transcription to cut latency, screen/clipboard context so it can see
-a shared code snippet as well as hear the question.
+cost, streaming transcription to cut latency, and Phase 3 context features.
+
+## Phase 3 features
+
+Phase 3 is opt-in and preserves the zero-storage default:
+
+- **Translation** — set “Translate questions to” in setup.
+- **Local transcription** — select “Local: faster-whisper” and choose a model
+  such as `base` or `small`; install `pip install -e ".[local-stt]"`.
+- **Participant labels** — enable approximate alternating labels for exported turns.
+  Mono loopback audio cannot provide verified speaker identity.
+- **Domain knowledge** — point “Domain knowledge folder” at local Markdown, text,
+  code, or JSON references. Matching snippets are supplied to the answer model.
+- **OCR** — install `pip install -e ".[phase3]"`, then use
+  `orbit.phase3.ocr.extract_text(path)` for a shared screenshot or code image.
+- **Session export** — enable “Allow explicit session export”; the overlay then
+  exposes an Export button after stopping. Nothing is exported automatically.
+- **macOS capture** — install `sounddevice` and a CoreAudio loopback device such as
+  BlackHole, then select its device index. Windows continues to use WASAPI loopback.
 
 ## Cost
 

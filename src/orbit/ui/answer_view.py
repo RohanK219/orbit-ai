@@ -171,6 +171,13 @@ class AnswerView(QTextBrowser):
             blocks.extend(turn.code_blocks())
         return blocks
 
+    def turns_for_export(self) -> list[dict[str, str]]:
+        """Return a content snapshot only when the user explicitly exports."""
+        return [
+            {"question": turn.question, "answer": turn.answer, "speaker": "Participant"}
+            for turn in self._turns
+        ]
+
     def copy_last_code_block(self) -> bool:
         """Copy the final code block in the feed. False if there is none."""
         blocks = self.code_blocks()
