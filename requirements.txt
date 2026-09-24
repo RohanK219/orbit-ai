@@ -1,0 +1,34 @@
+# orbit-ai Phase 0 dependencies
+#
+# Versions use lower bounds here because the exact resolved set depends on the
+# installed Python version. Immediately after the first successful install, run:
+#     pip freeze > requirements.lock.txt
+# and use the lock file for reproducible environments.
+
+# WASAPI loopback capture (Windows only). PortAudio/PyAudio fork that exposes
+# output devices as loopback input devices, which is how we hear system audio.
+PyAudioWPatch==0.2.12.8
+
+# Audio buffer maths (RMS, downmix, int16 <-> float conversion)
+numpy>=1.26,<3
+
+# High quality, very fast resampling 48kHz -> 16kHz
+soxr>=0.5.0,<1
+
+# OpenAI transcription + chat completions
+openai>=1.68,<3
+
+# Secure API key storage via Windows Credential Manager
+keyring>=25.0,<26
+
+# Optional .env loading for local development
+python-dotenv>=1.0,<2
+
+# Desktop UI (Phase 1). "Essentials" carries QtCore/QtGui/QtWidgets and omits
+# WebEngine, 3D, Charts and friends, which we do not use. Roughly a third of the
+# size of the full PySide6 wheel, and that difference carries straight into the
+# packaged executable.
+PySide6-Essentials>=6.7,<7
+
+# Syntax highlighting for code blocks in answers
+Pygments>=2.17,<3

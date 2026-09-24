@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbit-ai"
+version = "0.1.0"
+description = "Live meeting assistant for Windows: system audio in, answers on screen"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "PyAudioWPatch==0.2.12.8",
+    "numpy>=1.26,<3",
+    "soxr>=0.5.0,<1",
+    "openai>=1.68,<3",
+    "keyring>=25.0,<26",
+    "python-dotenv>=1.0,<2",
+    "PySide6-Essentials>=6.7,<7",
+    "Pygments>=2.17,<3",
+]
+
+[project.optional-dependencies]
+# Optional local transcription backend, removes per-minute API cost.
+# Needs a CUDA-capable GPU to keep up with live audio.
+local-stt = ["faster-whisper>=1.0,<2"]
+# Packaging
+build = ["pyinstaller>=6.6,<7"]
+
+[project.gui-scripts]
+orbit-ai = "orbit.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 95
+target-version = "py310"

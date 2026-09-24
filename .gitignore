@@ -1,0 +1,40 @@
+# Environments
+.venv/
+venv/
+env/
+
+# Secrets - never commit these
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Local Whisper model cache (Phase 2 optional backend)
+models/
+
+# Captured audio from debug runs
+*.wav
+recordings/
+
+# PyInstaller build artifacts (spec is kept; generated output is not)
+*.manifest
+
+# Temporary build/verification scratch files
+_*.log
+_*.ps1
+_*.done
+_*.out
+_*.err
+_*.txt
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
