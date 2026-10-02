@@ -23,7 +23,9 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 # Spec files are executed before Analysis applies ``pathex``. Add the source
 # tree here as well so collect_submodules can see the local Phase 3 package
 # when PyInstaller is invoked from either the repository root or packaging/.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+# PyInstaller executes spec files without defining ``__file__``.
+_spec_dir = Path(globals().get("SPECPATH", Path.cwd())).resolve()
+sys.path.insert(0, str(_spec_dir.parent / "src"))
 
 block_cipher = None
 
