@@ -290,6 +290,8 @@ def test_worker_gate() -> None:
 
 def test_windows() -> None:
     print("\n-- window construction --")
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
     from orbit.core.worker import (
         STATE_ERROR,
         STATE_IDLE,
@@ -299,14 +301,15 @@ def test_windows() -> None:
     from orbit.settings import Settings
     from orbit.ui.main_window import MainWindow
     from orbit.ui.overlay import Overlay
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    app = QApplication.instance()
 
     settings = Settings()
 
     overlay = Overlay(settings)
     check("overlay constructed", overlay is not None)
     flags = overlay.windowFlags()
-    from PySide6.QtCore import Qt
-
     check(
         "frameless",
         bool(flags & Qt.WindowType.FramelessWindowHint),
@@ -380,16 +383,75 @@ def test_windows() -> None:
 
     window = MainWindow(settings)
     check("setup window constructed", window is not None)
+    scroll = window.findChild(QScrollArea, "SetupScrollArea")
+    check("setup settings are in a scroll area", scroll is not None)
+    if scroll is not None:
+        check(
+            "setup scrolls vertically without horizontal overflow",
+            scroll.horizontalScrollBarPolicy().name == "ScrollBarAlwaysOff",
+        )
+        window.resize(480, 420)
+        window.show()
+        if app is not None:
+            app.processEvents()
+        check(
+            "small setup window can scroll settings",
+            scroll.verticalScrollBar().maximum() > 0,
+        )
+        window.device_combo.setCurrentIndex(0)
+        scroll.verticalScrollBar().setValue(
+            min(40, scroll.verticalScrollBar().maximum())
+        )
+        page_before_wheel = scroll.verticalScrollBar().value()
+        combo_pos = window.device_combo.rect().center()
+        wheel = QWheelEvent(
+            QPointF(combo_pos),
+            QPointF(window.device_combo.mapToGlobal(combo_pos)),
+            QPoint(),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.ScrollUpdate,
+            False,
+        )
+        if app is not None:
+            QApplication.sendEvent(window.device_combo, wheel)
+            app.processEvents()
+        check(
+            "wheel over closed dropdown scrolls page without changing selection",
+            window.device_combo.currentIndex() == 0
+            and scroll.verticalScrollBar().value() < page_before_wheel,
+            f"selection={window.device_combo.currentIndex()}, "
+            f"page={scroll.verticalScrollBar().value()}",
+        )
+        check(
+            "start button remains available while settings scroll",
+            window.start_button.isVisible(),
+        )
+    check(
+        "setup window supports maximizing",
+        bool(window.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint),
+    )
     check(
         "device combo has automatic entry",
         window.device_combo.count() >= 1,
         f"{window.device_combo.count()} entries",
     )
     check("model combo populated", window.llm_combo.count() >= 2)
+    check("answer model accepts provider-specific model IDs", window.llm_combo.isEditable())
     check(
         "api key field is masked",
         window.key_edit.echoMode().name == "Password",
         window.key_edit.echoMode().name,
+    )
+
+    window.llm_combo.setCurrentText("provider/model-v1")
+    window.api_base_url_edit.setText("https://api.example.test/v1")
+    provider_settings = window.collect_settings()
+    check(
+        "provider URL and custom model are collected",
+        provider_settings.api_base_url == "https://api.example.test/v1"
+        and provider_settings.llm_model == "provider/model-v1",
     )
 
     window.llm_combo.setCurrentText("gpt-4o")

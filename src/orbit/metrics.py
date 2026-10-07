@@ -23,6 +23,7 @@ _STT_USD_PER_MINUTE = {
     "gpt-4o-mini-transcribe": 0.003,
     "gpt-4o-transcribe": 0.006,
     "whisper-1": 0.006,
+    "local-whisper": 0.0,
 }
 _LLM_USD_PER_MTOK = {
     # (input, output)

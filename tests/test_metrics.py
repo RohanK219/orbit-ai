@@ -17,6 +17,12 @@ class MetricsTests(unittest.TestCase):
         self.assertAlmostEqual(metrics.estimated_cost_usd(), expected)
         self.assertGreater(metrics.projected_hourly_cost_usd(), 0)
 
+    def test_local_whisper_has_no_estimated_transcription_api_charge(self):
+        metrics = MetricsCollector("local-whisper", "gpt-4o-mini")
+        metrics.add(Measurement(60, 0, 0, 0, 0, transcript_chars=400, answer_chars=800))
+        expected = (100 / 1_000_000) * 0.15 + (200 / 1_000_000) * 0.60
+        self.assertAlmostEqual(metrics.estimated_cost_usd(), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

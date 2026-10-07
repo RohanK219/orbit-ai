@@ -65,7 +65,6 @@ _excludes = [
     "PIL",
     "pytesseract",
     "sounddevice",
-    "faster_whisper",
     "pytest",
 ]
 

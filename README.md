@@ -12,8 +12,8 @@ It never touches your microphone, so your own voice is not captured or processed
 Windows system audio (WASAPI loopback)
   -> mono 16 kHz float32
   -> utterance segmentation (detects when the speaker stopped)
-  -> transcription        (gpt-4o-mini-transcribe)
-  -> streaming answer     (gpt-4o-mini)
+  -> transcription        (local faster-whisper or compatible API)
+  -> streaming answer     (selected OpenAI-compatible chat API)
   -> your screen
 ```
 
@@ -32,7 +32,10 @@ tokens cost dramatically more for an identical result.
 - Windows (WASAPI loopback is a Windows API; there is no cross-platform path)
 - Python 3.10 to 3.13
 - An audio output device whose driver supports loopback (nearly all do)
-- An OpenAI API key
+- An API key for an OpenAI-compatible chat-completions provider
+- For source installs with local transcription, install
+  `pip install -e ".[local-stt]"`. The standalone Windows executable includes
+  faster-whisper and downloads a model the first time it is selected.
 
 ## Setup
 
@@ -57,9 +60,19 @@ gitignored, but Credential Manager is the safer option.
 python scripts/run_app.py
 ```
 
-A setup window opens. Paste your API key, pick the audio device, press **Test
-audio** while something is playing to confirm capture works, then press **Start
-Transcript**. The setup window hides itself and the overlay appears.
+A setup window opens. Enter your provider's API base URL (leave blank for OpenAI),
+API key, and answer model. Use **Load models** if the provider offers a compatible
+model-list endpoint, or enter its model ID manually. Choose **Local: faster-whisper**
+to transcribe audio on your computer; the answer model still uses the selected API.
+Then pick the audio device, press **Test audio** while something is playing to
+confirm capture works, and press **Start Transcript**. The setup window hides and
+the overlay appears.
+
+The answer endpoint must implement the OpenAI-compatible Chat Completions API.
+This is not universal support for every vendor's proprietary API. API keys are
+stored in Windows Credential Manager; the API base URL and model ID are stored in
+the user settings file. The provider receives meeting text for answers. Audio is
+sent to a provider only when API transcription is selected.
 
 The overlay carries four controls and nothing else:
 
@@ -173,13 +186,12 @@ Phase 3 is opt-in and preserves the zero-storage default:
 
 ## Cost
 
-The only paid component. Everything else, including WASAPI, PyAudioWPatch and
-PySide6, is free.
+Provider charges depend on the selected API and its pricing. Local faster-whisper
+has no per-minute API charge, but uses your machine's CPU/GPU and requires a model
+download. Everything else, including WASAPI, PyAudioWPatch and PySide6, is free.
 
-Rough estimate at `gpt-4o-mini-transcribe` plus `gpt-4o-mini`, with silence gated out
-so it is not billed: **about $0.20 per meeting hour**, almost entirely transcription.
-The probe prints its own estimate. Verify real numbers against your
-[OpenAI billing page](https://platform.openai.com/pricing), since rates change.
+Cost estimates use built-in OpenAI model rates and may not reflect a custom
+provider's prices. Check your provider's pricing and usage limits; rates change.
 
 ## Project layout
 

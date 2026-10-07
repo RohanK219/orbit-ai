@@ -13,7 +13,8 @@ import os
 from dataclasses import dataclass, field
 
 KEYRING_SERVICE = "orbit-ai"
-KEYRING_USERNAME = "openai-api-key"
+KEYRING_USERNAME = "api-key"
+LEGACY_KEYRING_USERNAME = "openai-api-key"
 
 
 # --------------------------------------------------------------------------
@@ -78,7 +79,7 @@ class VadSettings:
 
 @dataclass(slots=True)
 class ModelSettings:
-    """Which OpenAI models to use.
+    """Which compatible API models to use.
 
     Cost note: we deliberately use a transcription model plus a *text* chat
     model rather than the speech-to-speech Realtime API. We only ever want text
@@ -92,6 +93,7 @@ class ModelSettings:
     llm_model: str = field(
         default_factory=lambda: os.getenv("ORBIT_LLM_MODEL", "gpt-4o-mini")
     )
+    api_base_url: str = ""
 
     #: Language hint for STT. Improves accuracy and speed when known.
     #: None lets the model auto-detect.
@@ -127,24 +129,26 @@ Be accurate. If you are unsure, say so briefly rather than inventing detail."""
 # --------------------------------------------------------------------------
 
 def load_api_key() -> str:
-    """Return the OpenAI API key, or raise with actionable guidance.
+    """Return the configured API key, or raise with actionable guidance.
 
     Resolution order, most secure first:
-      1. Windows Credential Manager (via keyring)
-      2. OPENAI_API_KEY environment variable
-      3. .env file in the project root
+      1. Windows Credential Manager (via keyring), including legacy OpenAI keys
+      2. ORBIT_API_KEY (or the legacy OPENAI_API_KEY) environment variable
+      3. Either variable in the .env file in the project root
     """
     try:
         import keyring
 
         key = keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        if not key:
+            key = keyring.get_password(KEYRING_SERVICE, LEGACY_KEYRING_USERNAME)
         if key:
             return key.strip()
     except Exception:
         # keyring missing or no backend available; fall through to env vars.
         pass
 
-    key = os.getenv("OPENAI_API_KEY")
+    key = os.getenv("ORBIT_API_KEY") or os.getenv("OPENAI_API_KEY")
     if key:
         return key.strip()
 
@@ -152,15 +156,51 @@ def load_api_key() -> str:
         from dotenv import load_dotenv
 
         load_dotenv()
-        key = os.getenv("OPENAI_API_KEY")
+        key = os.getenv("ORBIT_API_KEY") or os.getenv("OPENAI_API_KEY")
         if key:
             return key.strip()
     except ImportError:
         pass
 
     raise RuntimeError(
-        "No OpenAI API key found.\n"
+        "No API key found.\n"
         "  Recommended: python scripts/set_key.py    (Windows Credential Manager)\n"
         "  Or:          copy .env.example to .env and add your key\n"
-        "  Or:          $env:OPENAI_API_KEY = 'sk-...'"
+        "  Or:          $env:ORBIT_API_KEY = 'your-provider-key'"
     )
+
+
+def create_api_client(api_key: str, base_url: str = ""):
+    """Create an OpenAI-compatible client for the selected provider endpoint."""
+    from urllib.parse import urlsplit
+
+    from openai import OpenAI
+
+    base_url = base_url.strip()
+    if not base_url:
+        return OpenAI(api_key=api_key)
+
+    try:
+        parsed = urlsplit(base_url)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("API base URL is invalid.") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or (
+            parsed.scheme == "http"
+            and hostname.lower() not in {"localhost", "127.0.0.1", "::1"}
+        )
+    ):
+        raise ValueError(
+            "API base URL must use HTTPS (HTTP is allowed only for localhost) and "
+            "must not contain credentials, query parameters, or a fragment."
+        )
+    return OpenAI(api_key=api_key, base_url=base_url)
