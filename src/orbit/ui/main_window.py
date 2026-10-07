@@ -9,24 +9,28 @@ from __future__ import annotations
 
 import platform
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QPointF, Qt, QThread, Signal
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from ..config import load_api_key
+from ..config import create_api_client, load_api_key
 from ..core.audiotest import AudioTestWorker
 from ..settings import Settings, delete_api_key, has_api_key, save_api_key
 from . import theme
@@ -34,9 +38,9 @@ from .widgets import LevelMeter
 
 LLM_MODELS = ["gpt-4o-mini", "gpt-4o"]
 STT_MODELS = [
-    ("OpenAI: gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"),
-    ("OpenAI: gpt-4o-transcribe", "gpt-4o-transcribe"),
-    ("OpenAI: whisper-1", "whisper-1"),
+    ("API: gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"),
+    ("API: gpt-4o-transcribe", "gpt-4o-transcribe"),
+    ("API: whisper-1", "whisper-1"),
     ("Local: faster-whisper", "local-whisper"),
 ]
 LANGUAGES = [
@@ -48,6 +52,36 @@ LANGUAGES = [
     ("German", "de"),
     ("French", "fr"),
 ]
+
+
+class ScrollPageComboBox(QComboBox):
+    """Let wheel scrolling pass through to the setup page while the list is closed."""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if not self.view().isVisible():
+            parent = self.parentWidget()
+            while parent is not None and not isinstance(parent, QScrollArea):
+                parent = parent.parentWidget()
+            if parent is None:
+                event.ignore()
+                return
+
+            global_position = event.globalPosition()
+            forwarded = QWheelEvent(
+                QPointF(parent.viewport().mapFromGlobal(global_position.toPoint())),
+                global_position,
+                event.pixelDelta(),
+                event.angleDelta(),
+                event.buttons(),
+                event.modifiers(),
+                event.phase(),
+                event.inverted(),
+                event.source(),
+            )
+            QApplication.sendEvent(parent.viewport(), forwarded)
+            event.setAccepted(forwarded.isAccepted())
+            return
+        super().wheelEvent(event)
 
 
 class MainWindow(QWidget):
@@ -62,23 +96,42 @@ class MainWindow(QWidget):
         self._test_worker: AudioTestWorker | None = None
 
         self.setWindowTitle("orbit-ai — setup")
-        self.setMinimumWidth(560)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        available_width = available.width() if available is not None else 1200
+        available_height = available.height() if available is not None else 900
+        self.setMinimumSize(min(480, available_width), min(420, available_height))
 
         self._build_ui()
         self._load_from_settings()
         self.refresh_devices()
         self._refresh_key_status()
+        self.resize(min(680, available_width), min(820, available_height))
 
     # -- construction ------------------------------------------------------
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 18)
-        root.setSpacing(14)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+
+        content = QWidget(self)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(4, 4, 4, 4)
+        content_layout.setSpacing(10)
+
+        scroll = QScrollArea(self)
+        scroll.setObjectName("SetupScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
 
         heading = QLabel("orbit-ai", self)
         heading.setObjectName("Heading")
-        root.addWidget(heading)
+        content_layout.addWidget(heading)
 
         subtitle = QLabel(
             "Listens to your meeting's audio, transcribes the questions, and "
@@ -87,19 +140,18 @@ class MainWindow(QWidget):
         )
         subtitle.setObjectName("SectionLabel")
         subtitle.setWordWrap(True)
-        root.addWidget(subtitle)
+        content_layout.addWidget(subtitle)
 
-        root.addWidget(self._build_key_group())
-        root.addWidget(self._build_audio_group())
-        root.addWidget(self._build_model_group())
-        root.addWidget(self._build_tuning_group())
+        content_layout.addWidget(self._build_key_group())
+        content_layout.addWidget(self._build_audio_group())
+        content_layout.addWidget(self._build_model_group())
+        content_layout.addWidget(self._build_tuning_group())
 
         self.status_label = QLabel("", self)
         self.status_label.setObjectName("SectionLabel")
         self.status_label.setWordWrap(True)
-        root.addWidget(self.status_label)
-
-        root.addStretch(1)
+        content_layout.addWidget(self.status_label)
+        content_layout.addStretch(1)
 
         self.start_button = QPushButton("Start Transcript", self)
         self.start_button.setObjectName("PrimaryButton")
@@ -107,8 +159,9 @@ class MainWindow(QWidget):
         root.addWidget(self.start_button)
 
         note = QLabel(
-            "Meeting audio is sent to OpenAI for transcription. Nothing is saved "
-            "to disk. Consent requirements vary by country and state.",
+            "Meeting audio is sent to your selected transcription provider unless "
+            "Local: faster-whisper is selected. Transcribed text is sent to your "
+            "selected answer provider. Nothing is saved to disk.",
             self,
         )
         note.setObjectName("SectionLabel")
@@ -116,22 +169,47 @@ class MainWindow(QWidget):
         root.addWidget(note)
 
     def _build_key_group(self) -> QGroupBox:
-        group = QGroupBox("OpenAI API key", self)
+        group = QGroupBox("AI provider (OpenAI-compatible)", self)
         layout = QVBoxLayout(group)
 
         row = QHBoxLayout()
+        self.api_base_url_edit = QLineEdit(group)
+        self.api_base_url_edit.setPlaceholderText(
+            "Optional — defaults to https://api.openai.com/v1"
+        )
+        self.api_base_url_edit.setToolTip(
+            "Use an OpenAI-compatible API endpoint. Include its /v1 path when required."
+        )
+        self.llm_combo = ScrollPageComboBox(group)
+        self.llm_combo.setEditable(True)
+        self.llm_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.llm_combo.addItems(LLM_MODELS)
+        self.llm_combo.setToolTip(
+            "Choose a model returned by Load models, or enter the model ID from your provider."
+        )
+
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.addRow("API base URL", self.api_base_url_edit)
+        form.addRow("Answer model", self.llm_combo)
+        layout.addLayout(form)
+
         self.key_edit = QLineEdit(group)
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_edit.setPlaceholderText("sk-...")
+        self.key_edit.setPlaceholderText("Paste provider API key")
         self.save_key_button = QPushButton("Save", group)
         self.save_key_button.clicked.connect(self._on_save_key)
         self.forget_key_button = QPushButton("Forget", group)
         self.forget_key_button.clicked.connect(self._on_forget_key)
+        self.load_models_button = QPushButton("Load models", group)
+        self.load_models_button.clicked.connect(self._load_models)
 
         row.addWidget(self.key_edit, 1)
         row.addWidget(self.save_key_button)
         row.addWidget(self.forget_key_button)
         layout.addLayout(row)
+        layout.addWidget(self.load_models_button)
 
         self.key_status = QLabel("", group)
         self.key_status.setObjectName("SectionLabel")
@@ -144,7 +222,7 @@ class MainWindow(QWidget):
         layout = QVBoxLayout(group)
 
         row = QHBoxLayout()
-        self.device_combo = QComboBox(group)
+        self.device_combo = ScrollPageComboBox(group)
         self.refresh_button = QPushButton("Refresh", group)
         self.refresh_button.clicked.connect(self.refresh_devices)
         self.test_button = QPushButton("Test audio", group)
@@ -171,22 +249,17 @@ class MainWindow(QWidget):
     def _build_model_group(self) -> QGroupBox:
         group = QGroupBox("Models", self)
         layout = QFormLayout(group)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.llm_combo = QComboBox(group)
-        self.llm_combo.addItems(LLM_MODELS)
-        self.llm_combo.setToolTip(
-            "gpt-4o-mini is fast and cheap. gpt-4o is stronger on hard problems "
-            "but slower and costs more."
-        )
-
-        self.stt_combo = QComboBox(group)
+        self.stt_combo = ScrollPageComboBox(group)
         for label, value in STT_MODELS:
             self.stt_combo.addItem(label, value)
         self.local_model_edit = QLineEdit(group)
         self.local_model_edit.setPlaceholderText("base, small, medium...")
         self.local_model_edit.setToolTip("faster-whisper model name used for local transcription.")
 
-        self.language_combo = QComboBox(group)
+        self.language_combo = ScrollPageComboBox(group)
         for label, code in LANGUAGES:
             self.language_combo.addItem(label, code)
 
@@ -199,7 +272,6 @@ class MainWindow(QWidget):
         self.target_language_edit.setPlaceholderText("Leave blank to keep original language")
         self.target_language_edit.setToolTip("Translate finalized questions to this language.")
 
-        layout.addRow("Answers", self.llm_combo)
         layout.addRow("Transcription", self.stt_combo)
         layout.addRow("Local Whisper model", self.local_model_edit)
         layout.addRow("Language", self.language_combo)
@@ -210,6 +282,8 @@ class MainWindow(QWidget):
     def _build_tuning_group(self) -> QGroupBox:
         group = QGroupBox("Tuning", self)
         layout = QFormLayout(group)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         self.silence_spin = QSpinBox(group)
         self.silence_spin.setRange(200, 3000)
@@ -234,6 +308,7 @@ class MainWindow(QWidget):
         self.limit_spin.setPrefix("$ ")
         self.limit_spin.setToolTip(
             "Stop making paid calls after this much spend in one session. "
+            "Uses built-in OpenAI rate estimates; custom provider pricing may differ. "
             "0 means no limit."
         )
 
@@ -266,6 +341,7 @@ class MainWindow(QWidget):
     def _load_from_settings(self) -> None:
         s = self._settings
         self.llm_combo.setCurrentText(s.llm_model)
+        self.api_base_url_edit.setText(s.api_base_url)
         stt_index = self.stt_combo.findData(s.stt_model)
         self.stt_combo.setCurrentIndex(stt_index if stt_index >= 0 else 0)
         self.local_model_edit.setText(s.local_whisper_model)
@@ -288,6 +364,7 @@ class MainWindow(QWidget):
         """Read the form back into the settings object and persist it."""
         s = self._settings
         s.llm_model = self.llm_combo.currentText()
+        s.api_base_url = self.api_base_url_edit.text().strip()
         s.stt_model = self.stt_combo.currentData() or "gpt-4o-mini-transcribe"
         s.local_whisper_model = self.local_model_edit.text().strip() or "base"
         s.language = self.language_combo.currentData() or "en"
@@ -408,60 +485,89 @@ class MainWindow(QWidget):
         if not key:
             self.key_status.setText("Enter a key first.")
             return
-        if not key.startswith("sk-"):
-            confirm = QMessageBox.question(
-                self,
-                "Unusual key format",
-                "That does not look like an OpenAI key, which normally starts "
-                "with 'sk-'. Save it anyway?",
-            )
-            if confirm != QMessageBox.StandardButton.Yes:
-                return
 
         try:
+            # Validate URL syntax before persisting it or the credential.
+            client = create_api_client(key, self.api_base_url_edit.text())
+            client.close()
             save_api_key(key)
+            self._settings.api_base_url = self.api_base_url_edit.text().strip()
+            self._settings.llm_model = (
+                self.llm_combo.currentText().strip() or "gpt-4o-mini"
+            )
+            self._settings.save()
         except Exception as exc:
-            self.key_status.setText(f"Could not save the key: {exc}")
+            self.key_status.setText(
+                f"Could not save provider settings: {type(exc).__name__}"
+            )
             return
 
         self.key_edit.clear()
         self._refresh_key_status()
-        self._validate_key()
+        self.key_status.setText(
+            "Provider settings saved. The API key is encrypted in Windows Credential "
+            "Manager. Use Load models to check the connection."
+        )
 
     def _on_forget_key(self) -> None:
-        delete_api_key()
-        self._refresh_key_status()
+        try:
+            delete_api_key()
+        except Exception as exc:
+            self.key_status.setText(
+                f"Could not remove the API key: {type(exc).__name__}"
+            )
+        else:
+            self._refresh_key_status()
 
     def _refresh_key_status(self) -> None:
         if has_api_key():
             self.key_status.setText(
-                "A key is stored in Windows Credential Manager, encrypted for "
+                "An API key is stored in Windows Credential Manager, encrypted for "
                 "your user account. It is never written to a file."
             )
         else:
             self.key_status.setText(
-                "No key stored yet. It goes into Windows Credential Manager, "
-                "not a config file."
+                "No API key stored yet. Save your provider key to Windows "
+                "Credential Manager; it is not written to a config file."
             )
 
-    def _validate_key(self) -> None:
-        """Cheap liveness check so a bad key fails now, not mid-meeting."""
+    def _load_models(self) -> None:
+        """Load model IDs from compatible endpoints that expose a model list."""
+        client = None
         try:
-            from openai import OpenAI
-
-            client = OpenAI(api_key=load_api_key())
-            client.models.list()
+            client = create_api_client(
+                load_api_key(), self.api_base_url_edit.text()
+            )
+            models = client.models.list()
+            model_ids = sorted({model.id for model in models.data if model.id})
         except Exception as exc:
-            self.key_status.setText(f"The key was saved but rejected: {exc}")
+            self.key_status.setText(
+                f"Could not load models ({type(exc).__name__}). Check the API URL/key; "
+                "if model listing is unsupported, enter the model ID manually."
+            )
             return
-        self.key_status.setText("Key saved and verified against OpenAI.")
+        finally:
+            if client is not None:
+                client.close()
+        if not model_ids:
+            self.key_status.setText(
+                "The provider returned no models. Enter a model ID manually."
+            )
+            return
+        selected = self.llm_combo.currentText().strip()
+        self.llm_combo.clear()
+        self.llm_combo.addItems(model_ids)
+        self.llm_combo.setCurrentText(
+            selected if selected in model_ids else model_ids[0]
+        )
+        self.key_status.setText(f"Loaded {len(model_ids)} model(s) from the provider.")
 
     # -- start -------------------------------------------------------------
 
     def _on_start_clicked(self) -> None:
         if not has_api_key():
             self.status_label.setText(
-                "Add your OpenAI API key above before starting."
+                "Save your provider API key above before starting."
             )
             self.key_edit.setFocus()
             return
@@ -487,7 +593,11 @@ def show_consent_notice(parent: QWidget | None, settings: Settings) -> bool:
 
     Returns True if the user accepted. Recorded in settings so it is shown once.
     """
-    if settings.consent_acknowledged:
+    if (
+        settings.consent_acknowledged
+        and settings.consented_api_base_url == settings.api_base_url
+        and settings.consented_stt_model == settings.stt_model
+    ):
         return True
 
     box = QMessageBox(parent)
@@ -495,9 +605,10 @@ def show_consent_notice(parent: QWidget | None, settings: Settings) -> bool:
     box.setIcon(QMessageBox.Icon.Information)
     box.setText("orbit-ai processes other people's speech.")
     box.setInformativeText(
-        "While listening, the audio coming out of your speakers is sent to "
-        "OpenAI to be transcribed. That includes what other meeting "
-        "participants say.\n\n"
+        "While listening, meeting audio is sent to the configured transcription "
+        "provider (unless Local: faster-whisper is selected). Transcribed text "
+        "is sent to the configured answer provider. This includes other "
+        "participants' speech.\n\n"
         "Nothing is written to disk, and your microphone is never used. Even "
         "so, recording or processing other people's speech carries legal "
         "obligations in the EU, the UK, and several US states.\n\n"
@@ -512,5 +623,7 @@ def show_consent_notice(parent: QWidget | None, settings: Settings) -> bool:
         return False
 
     settings.consent_acknowledged = True
+    settings.consented_api_base_url = settings.api_base_url
+    settings.consented_stt_model = settings.stt_model
     settings.save()
     return True

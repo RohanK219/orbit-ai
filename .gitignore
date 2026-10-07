@@ -13,6 +13,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+build-updated/
+dist-updated/
 .pytest_cache/
 
 # Local Whisper model cache (Phase 2 optional backend)

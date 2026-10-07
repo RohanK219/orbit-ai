@@ -15,9 +15,11 @@ class Translator:
     def translate(self, text: str, target_language: str) -> str:
         if not text.strip() or not target_language.strip():
             return text
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
+        from openai import BadRequestError
+
+        kwargs = {
+            "model": self._model,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -31,6 +33,16 @@ class Translator:
                     "content": f"Target language: {target_language}\n\n{text}",
                 },
             ],
-            max_completion_tokens=max(64, min(4000, len(text) * 2)),
-        )
+            "max_completion_tokens": max(64, min(4000, len(text) * 2)),
+        }
+        try:
+            response = self._client.chat.completions.create(**kwargs)
+        except BadRequestError as exc:
+            message = str(exc).lower()
+            if "max_completion_tokens" not in message or (
+                "unsupported" not in message and "not supported" not in message
+            ):
+                raise
+            kwargs["max_tokens"] = kwargs.pop("max_completion_tokens")
+            response = self._client.chat.completions.create(**kwargs)
         return (response.choices[0].message.content or text).strip()

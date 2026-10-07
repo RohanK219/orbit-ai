@@ -29,11 +29,19 @@ if (-not (Test-Path $validation)) {
     exit 1
 }
 
-Write-Host "==> Ensuring PyInstaller is installed"
-& $venvPy -m pip install "pyinstaller>=6.6,<7" --disable-pip-version-check --quiet 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Could not install PyInstaller (pip exit code $LASTEXITCODE). Check the pip output above."
-    exit $LASTEXITCODE
+Write-Host "==> Installing app, local Whisper, and build dependencies"
+Push-Location $root
+try {
+    & $venvPy -m pip install -e ".[local-stt]" "pyinstaller>=6.6,<7" `
+        --disable-pip-version-check --quiet 2>&1
+    $installCode = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}
+if ($installCode -ne 0) {
+    Write-Error "Could not install build dependencies (pip exit code $installCode)."
+    exit $installCode
 }
 
 Write-Host "==> Validating packaging inputs"

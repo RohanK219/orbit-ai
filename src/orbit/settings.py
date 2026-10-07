@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from .config import (
+    LEGACY_KEYRING_USERNAME,
     KEYRING_SERVICE,
     KEYRING_USERNAME,
     VAD_FRAME_MS,
@@ -65,6 +66,7 @@ class Settings:
     stt_model: str = "gpt-4o-mini-transcribe"
     local_whisper_model: str = "base"
     llm_model: str = "gpt-4o-mini"
+    api_base_url: str = ""
     #: Language hint for transcription. "auto" lets the model detect it.
     language: str = "en"
     max_answer_tokens: int = 700
@@ -105,6 +107,8 @@ class Settings:
 
     # -- one-time state ------------------------------------------------------
     consent_acknowledged: bool = False
+    consented_api_base_url: str = ""
+    consented_stt_model: str = ""
 
     hotkeys: dict[str, str] = field(
         default_factory=lambda: dict(DEFAULT_HOTKEYS)
@@ -126,6 +130,7 @@ class Settings:
         return ModelSettings(
             stt_model=self.stt_model,
             llm_model=self.llm_model,
+            api_base_url=self.api_base_url,
             stt_language=None if self.language.lower() == "auto" else self.language,
             max_answer_tokens=self.max_answer_tokens,
             context_turns=self.context_turns,
@@ -218,6 +223,13 @@ class Settings:
             self.target_language = ""
         if not isinstance(self.domain_knowledge_dir, str):
             self.domain_knowledge_dir = ""
+        if not isinstance(self.api_base_url, str):
+            self.api_base_url = ""
+        self.api_base_url = self.api_base_url.strip()
+        if not isinstance(self.consented_api_base_url, str):
+            self.consented_api_base_url = ""
+        if not isinstance(self.consented_stt_model, str):
+            self.consented_stt_model = ""
 
         if not isinstance(self.hotkeys, dict):
             self.hotkeys = dict(DEFAULT_HOTKEYS)
@@ -241,27 +253,33 @@ class Settings:
 # ----------------------------------------------------------------------
 
 def save_api_key(key: str) -> None:
-    """Store the API key in Windows Credential Manager."""
+    """Store the provider API key in Windows Credential Manager."""
     import keyring
 
     keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key.strip())
 
 
 def delete_api_key() -> None:
-    """Remove the stored API key. Safe to call when none is stored."""
-    try:
-        import keyring
+    """Remove current and legacy stored keys. Safe when either is absent."""
+    import keyring
 
-        keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
-    except Exception:
-        pass
+    for username in (KEYRING_USERNAME, LEGACY_KEYRING_USERNAME):
+        try:
+            keyring.delete_password(KEYRING_SERVICE, username)
+        except keyring.errors.PasswordDeleteError:
+            pass
 
 
 def has_api_key() -> bool:
+    if os.getenv("ORBIT_API_KEY") or os.getenv("OPENAI_API_KEY"):
+        return True
     try:
         import keyring
 
-        return bool(keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME))
+        return bool(
+            keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+            or keyring.get_password(KEYRING_SERVICE, LEGACY_KEYRING_USERNAME)
+        )
     except Exception:
         return False
 

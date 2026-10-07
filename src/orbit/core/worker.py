@@ -30,7 +30,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from ..audio.capture import SystemAudioCapture
 from ..audio.devices import AudioDeviceError, resolve_device
 from ..audio.vad import Utterance, UtteranceSegmenter
-from ..config import CAPTURE_CHUNK_MS, TARGET_SAMPLE_RATE, load_api_key
+from ..config import CAPTURE_CHUNK_MS, TARGET_SAMPLE_RATE, create_api_client, load_api_key
 from ..llm.openai_llm import NO_QUESTION_MARKER, AnswerGenerator
 from ..metrics import Measurement, MetricsCollector, endpoint_delay_seconds
 from ..settings import Settings
@@ -142,14 +142,14 @@ class PipelineWorker(QObject):
         return self._stop.is_set() or self._force_answer.is_set()
 
     def _run_session(self) -> None:
-        from openai import OpenAI, OpenAIError
+        from openai import OpenAIError
 
         settings = self._settings
         model_settings = settings.to_model_settings()
         vad_settings = settings.to_vad_settings()
 
         api_key = load_api_key()
-        client = OpenAI(api_key=api_key)
+        client = create_api_client(api_key, model_settings.api_base_url)
         if settings.stt_model == "local-whisper":
             from ..stt.local_whisper import LocalWhisperTranscriber
 
@@ -481,8 +481,8 @@ def _short_error(exc: Exception) -> str:
 def _offline_message(exc: Exception) -> str:
     """A plain-language message for what looks like a connectivity problem."""
     return (
-        "Couldn't reach OpenAI after retrying. Check your internet connection "
-        "and try again.\n\n"
+        "Couldn't reach the configured API provider after retrying. Check your "
+        "internet connection and provider endpoint, then try again.\n\n"
         f"Details: {_short_error(exc)}"
     )
 

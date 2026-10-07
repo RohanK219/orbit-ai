@@ -18,7 +18,6 @@ OPTIONAL_MODULES = {
     "PIL": ("phase3", "pillow"),
     "pytesseract": ("phase3", "pytesseract"),
     "sounddevice": ("phase3", "sounddevice"),
-    "faster_whisper": ("local-stt", "faster-whisper"),
 }
 PHASE3_MODULES = {
     "__init__.py",
@@ -38,6 +37,7 @@ def fail(message: str) -> None:
 def main() -> int:
     pyproject_path = ROOT / "pyproject.toml"
     spec_path = ROOT / "packaging" / "orbit-ai.spec"
+    build_script = ROOT / "scripts" / "build_exe.ps1"
     source_root = ROOT / "src" / "orbit"
 
     try:
@@ -71,12 +71,16 @@ def main() -> int:
     for module in OPTIONAL_MODULES:
         if f'"{module}"' not in spec:
             fail(f"spec must exclude optional module {module}")
+    if '"faster_whisper"' in spec:
+        fail("spec must include faster-whisper in the standalone executable")
+    if ".[local-stt]" not in build_script.read_text(encoding="utf-8"):
+        fail("build script must install the local-stt extra")
     if 'collect_submodules("orbit.phase3")' not in spec:
         fail("spec must collect orbit.phase3 package modules")
 
     print(
         "packaging validation: OK "
-        f"(phase3 modules={len(PHASE3_MODULES)}, optional backends excluded)"
+        f"(phase3 modules={len(PHASE3_MODULES)}, faster-whisper included)"
     )
     return 0
 

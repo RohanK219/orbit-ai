@@ -26,9 +26,9 @@ This produces:
 dist\orbit-ai.exe
 ```
 
-Expect roughly 80-120 MB. It is large because it carries the Python runtime and the
-Qt UI libraries inside it, which is exactly what lets it run with nothing installed
-on the other side.
+The executable includes the Python runtime, Qt UI, and faster-whisper runtime. This
+makes it larger than a UI-only build. The selected Whisper model itself is downloaded
+and cached on the run machine the first time local transcription is used.
 
 ## 2. Move it to the run machine
 
@@ -60,11 +60,16 @@ exclusion for the file.
 
 In the setup window:
 
-1. **OpenAI API key** — paste your key and press **Save**. It is validated against
-   OpenAI immediately, and stored in Windows Credential Manager on that machine, not
-   in any file.
-2. **Audio source** — leave it on Automatic, or pick your speakers explicitly.
-3. **Test audio** — play any audio (a YouTube video works) and press this. The level
+1. **AI provider** — leave API base URL blank for OpenAI, or enter an
+   OpenAI-compatible Chat Completions endpoint. Paste the provider key and press
+   **Save**; it is stored in Windows Credential Manager on that machine, not in a
+   file. Use **Load models** when supported, or enter a model ID manually.
+2. **Transcription model** — select **Local: faster-whisper** to keep audio on the
+   machine. The selected model downloads on first use, so the first local startup
+   needs internet access. Alternatively, select a compatible API transcription model.
+   Answers always use the selected chat API.
+3. **Audio source** — leave it on Automatic, or pick your speakers explicitly.
+4. **Test audio** — play any audio (a YouTube video works) and press this. The level
    meter should move and it should report a detected peak. If it reads silence, the
    selected device is not where your sound is playing; pick a different one.
 
@@ -103,15 +108,18 @@ These could not be verified on the build machine, so confirm them on first real 
 
 ## Cost reminder
 
-Only the OpenAI API costs money. At the default models, budget roughly $0.20 per hour
-of meeting audio. Verify against your own OpenAI billing page, since rates change.
+Provider charges depend on the selected API and its pricing. Local faster-whisper has
+no per-minute API charge, but uses local CPU/GPU resources and requires downloading a
+model. Displayed cost estimates use built-in OpenAI rates and may not reflect a
+custom provider's prices; verify costs and limits with that provider.
 
 ## Privacy reminder
 
 While listening, audio from your speakers, which includes other participants, is sent
-to OpenAI for transcription. Nothing is written to disk. Recording or processing other
-people's speech carries legal obligations in some regions; make sure you are entitled
-to do it.
+to the configured transcription API unless Local: faster-whisper is selected.
+Transcribed text is sent to the configured answer API. Nothing is written to disk.
+Recording or processing other people's speech carries legal obligations in some
+regions; make sure you are entitled to do it.
 
 ---
 
